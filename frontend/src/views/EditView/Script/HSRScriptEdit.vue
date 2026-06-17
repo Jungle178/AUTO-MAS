@@ -369,6 +369,9 @@
                     <div>- SRA 保存的第一套攻略</div>
                     <div>- 运行次数 2</div>
                     <div>- 开拓者名称：从用户页读取</div>
+                    <div class="strategy-warning">
+                      - 重点提示：SRA 货币战争不会自动领取积分奖励，请在游戏内手动领取。
+                    </div>
                   </template>
                 </a-alert>
                 <a-alert
@@ -822,6 +825,12 @@ onMounted(async () => {
   font-weight: 600;
   color: var(--ant-color-text);
   font-size: 14px;
+}
+
+.strategy-warning {
+  margin-top: 8px;
+  color: var(--ant-color-warning);
+  font-weight: 600;
 }
 
 .help-icon {
