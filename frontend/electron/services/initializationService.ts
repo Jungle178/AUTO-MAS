@@ -48,7 +48,7 @@ export class InitializationService {
     private backendService: BackendService
     private targetBranch: string
 
-    constructor(appRoot: string, targetBranch: string = 'dev') {
+    constructor(appRoot: string, targetBranch: string = 'dev-nte-plus-hsr') {
         this.appRoot = appRoot
         this.mirrorService = new MirrorService(appRoot)
         this.backendService = new BackendService(appRoot, this.mirrorService)

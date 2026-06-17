@@ -17,7 +17,7 @@ let backendService: BackendService | null = null
 /**
  * 获取或创建初始化服务实例
  */
-function getInitService(targetBranch: string = 'dev'): InitializationService {
+function getInitService(targetBranch: string = 'dev-nte-plus-hsr'): InitializationService {
     const appRoot = getAppRoot()
 
     if (!initService) {
@@ -137,7 +137,7 @@ export function registerInitializationHandlers(mainWindow: BrowserWindow) {
 
     // ==================== 源码拉取 ====================
 
-    ipcMain.handle('pull-repository', async (event, targetBranch: string = 'dev', selectedMirror?: string) => {
+    ipcMain.handle('pull-repository', async (event, targetBranch: string = 'dev-nte-plus-hsr', selectedMirror?: string) => {
         if (selectedMirror) {
             logger.info(`使用指定镜像源拉取源码: ${selectedMirror}`)
         }
@@ -211,7 +211,7 @@ export function registerInitializationHandlers(mainWindow: BrowserWindow) {
 
     // ==================== 完整初始化流程（保留用于兼容） ====================
 
-    ipcMain.handle('initialize', async (event, targetBranch: string = 'dev', startBackend: boolean = true) => {
+    ipcMain.handle('initialize', async (event, targetBranch: string = 'dev-nte-plus-hsr', startBackend: boolean = true) => {
         logger.info(`开始初始化 - 目标分支: ${targetBranch}, 启动后端: ${startBackend}`)
 
         const initService = getInitService(targetBranch)
@@ -240,7 +240,7 @@ export function registerInitializationHandlers(mainWindow: BrowserWindow) {
 
     // ==================== 仅更新模式 ====================
 
-    ipcMain.handle('update-only', async (event, targetBranch: string = 'dev') => {
+    ipcMain.handle('update-only', async (event, targetBranch: string = 'dev-nte-plus-hsr') => {
         logger.info(`开始更新模式 - 目标分支: ${targetBranch}`)
 
         const initService = getInitService(targetBranch)

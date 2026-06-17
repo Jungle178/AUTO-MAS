@@ -46,7 +46,7 @@ export class RepositoryService {
     private rotationService: MirrorRotationService
     private targetBranch: string
 
-    constructor(appRoot: string, mirrorService: MirrorService, targetBranch: string = 'dev') {
+    constructor(appRoot: string, mirrorService: MirrorService, targetBranch: string = 'dev-nte-plus-hsr') {
         this.appRoot = appRoot
         this.repoPath = path.join(appRoot, 'repo')
         this.gitExe = path.join(appRoot, 'environment', 'git', 'bin', 'git.exe')
