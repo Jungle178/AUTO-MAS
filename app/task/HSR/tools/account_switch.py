@@ -195,6 +195,8 @@ class HSRAccountSwitcher:
         self,
         script: str,
         user_name: str = "",
+        *,
+        track_last_script: bool = True,
     ) -> None:
         """SRA/M7A 交替执行前留出缓冲，切换时重启游戏避免状态污染。"""
 
@@ -208,7 +210,10 @@ class HSRAccountSwitcher:
             # 切换时由 MAS 关闭并重新拉起游戏，避免上一个脚本遗留的页面
             # 状态导致下一个脚本无法初始化（例如 SRA 找不到 enter.png）。
             await self._restart_game_after_script_switch(user_name)
-        self.runtime.last_external_script = script
+        if track_last_script:
+            self.runtime.last_external_script = script
+        if script == "M7A":
+            self.runtime.game_session_clean = False
 
     async def _restart_game_after_script_switch(self, user_name: str) -> None:
         """M7A/SRA 切换时由 MAS 关闭并重新启动游戏。"""
@@ -223,6 +228,9 @@ class HSRAccountSwitcher:
         self.runtime.game_exe_path = game_exe_path
         self.runtime.game_launch_checked = False
         self.runtime.game_started_by_mas = False
+        self.runtime.game_session_clean = False
+        self.runtime.last_external_script = None
+        self.runtime.game_transitioning = True
 
         try:
             await System.kill_process(game_exe_path)
@@ -242,7 +250,10 @@ class HSRAccountSwitcher:
             self._append_log(f"脚本切换时关闭游戏失败：{e}")
             # 关闭失败不抛错，让 ensure_game_started_by_mas 继续尝试
 
-        await self.ensure_game_started_by_mas()
+        try:
+            await self.ensure_game_started_by_mas()
+        finally:
+            self.runtime.game_transitioning = False
 
     async def ensure_game_started_by_mas(self) -> None:
         """在 SRA/M7A 接手前由 MAS 统一启动游戏。"""
@@ -289,18 +300,27 @@ class HSRAccountSwitcher:
         self.runtime.game_exe_path = game_exe_path
         self.runtime.game_launch_checked = False
         self.runtime.game_started_by_mas = False
+        self.runtime.game_session_clean = False
         self.runtime.last_external_script = None
+        self.runtime.game_transitioning = True
 
-        if process_name and is_process_running(process_name):
-            self._append_log(
-                f"用户「{user_name}」需要登录/切号，检测到游戏正在运行，"
-                f"正在关闭游戏并等待 {HSR_GAME_READY_DELAY_SECONDS}s 后重启"
-            )
-            await System.kill_process(game_exe_path)
-            await self.runtime.game_process_manager.clear()
-            await asyncio.sleep(HSR_GAME_READY_DELAY_SECONDS)
+        try:
+            if process_name and is_process_running(process_name):
+                self._append_log(
+                    f"用户「{user_name}」需要登录/切号，检测到游戏正在运行，"
+                    f"正在关闭游戏并等待 {HSR_GAME_READY_DELAY_SECONDS}s 后重启"
+                )
+                try:
+                    await System.kill_process(game_exe_path)
+                    await self.runtime.game_process_manager.clear()
+                    await asyncio.sleep(HSR_GAME_READY_DELAY_SECONDS)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(f"登录/切号前关闭 HSR 游戏失败：{e}")
+                    self._append_log(f"登录/切号前关闭游戏失败，将继续尝试启动流程：{e}")
 
-        await self.ensure_game_started_by_mas()
+            await self.ensure_game_started_by_mas()
+        finally:
+            self.runtime.game_transitioning = False
 
     async def close_game_if_needed(self) -> None:
         await close_game_if_needed(self.runtime, self.script_config, self._append_log)
@@ -314,10 +334,15 @@ class HSRAccountSwitcher:
         module_name: str,
         timeout_seconds: int | None = None,
         module_key: str = "",
+        track_script_switch: bool = True,
     ) -> SRACommandResult:
         """执行一条 SRA 单任务并同步调度台日志。"""
 
-        await self.wait_before_external_script("SRA", user_name)
+        await self.wait_before_external_script(
+            "SRA",
+            user_name,
+            track_last_script=track_script_switch,
+        )
         self._append_log(
             f"用户「{user_name}」开始执行 SRA {module_name}（{task_class}）"
         )
@@ -369,14 +394,17 @@ class HSRAccountSwitcher:
             module_key,
         )
         temp_files.append(temp_path)
-        return await self.run_sra_task(
+        result = await self.run_sra_task(
             sra_exe_path,
             "StartGameTask",
             temp_path,
             user_name,
             "登录/切号",
             timeout_seconds=timeout_seconds,
+            track_script_switch=False,
         )
+        self.runtime.game_session_clean = bool(result.success)
+        return result
 
     async def _wait_after_game_process_detected(self, process_name: str) -> None:
         self._append_log(

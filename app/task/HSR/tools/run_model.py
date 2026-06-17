@@ -123,6 +123,8 @@ class HSRRuntimeState:
     game_started_by_mas: bool = False
     game_exe_path: Path | None = None
     last_external_script: HSRScriptRunner | None = None
+    game_session_clean: bool = False
+    game_transitioning: bool = False
 
     def record_module_result(self, result: HSRModuleResult) -> None:
         """记录模块最终态；同一用户同一模块以后写入为准。"""

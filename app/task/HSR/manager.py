@@ -663,21 +663,38 @@ class HSRManager(TaskExecuteBase):
             "result": self.script_info.result,
         }
 
-        await Notify.push_plyer(
-            title.replace("报告", "已完成！"),
-            f"已完成用户数: {len(over_user)}, 未完成用户数: {uncompleted_count}",
-            f"已完成用户数: {len(over_user)}, 未完成用户数: {uncompleted_count}",
-            10,
-        )
+        try:
+            await Notify.push_plyer(
+                title.replace("报告", "已完成！"),
+                f"已完成用户数: {len(over_user)}, 未完成用户数: {uncompleted_count}",
+                f"已完成用户数: {len(over_user)}, 未完成用户数: {uncompleted_count}",
+                10,
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.exception(f"推送 HSR 系统通知时出现异常: {e}")
+            await self._send_notification_error(
+                f"推送 HSR 系统通知时出现异常: {e}"
+            )
+
         try:
             await push_notification("代理结果", title, result, None)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.exception(f"推送 HSR 代理结果时出现异常: {e}")
+            await self._send_notification_error(
+                f"推送 HSR 代理结果时出现异常: {e}"
+            )
+
+    async def _send_notification_error(self, message: str) -> None:
+        """通知失败时尽量提示前端；提示失败不影响任务收尾。"""
+
+        try:
             await Config.send_websocket_message(
                 id=self.task_info.task_id,
                 type="Info",
-                data={"Error": f"推送 HSR 代理结果时出现异常: {e}"},
+                data={"Error": message},
             )
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"发送 HSR 通知错误提示失败：{e}")
 
     async def final_task(self):
         """解锁配置、恢复外部配置并落盘日志。"""

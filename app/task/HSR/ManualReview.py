@@ -134,6 +134,21 @@ class HSRManualReviewTask(TaskExecuteBase):
         self.message_queue = asyncio.Queue()
         await Broadcast.subscribe(self.message_queue)
 
+    async def _unsubscribe_broadcast(self) -> None:
+        """释放人工排查消息订阅，避免旧队列持续接收广播。"""
+
+        if self.message_queue is None:
+            return
+
+        queue = self.message_queue
+        self.message_queue = None
+        try:
+            await Broadcast.unsubscribe(queue)
+        except KeyError:
+            logger.warning("HSR 人工排查消息队列已取消订阅，跳过重复清理")
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"HSR 人工排查消息队列取消订阅失败：{e}")
+
     async def _ask_question(self, message: str) -> bool:
         message_id = str(uuid.uuid4())
         await Config.send_websocket_message(
@@ -229,34 +244,47 @@ class HSRManualReviewTask(TaskExecuteBase):
     async def final_task(self) -> str | None:
         """写回人工检查结果并清理临时 SRA 配置。"""
 
-        for temp_path in self.temp_files:
-            cleanup_sra_temp_config(temp_path)
+        try:
+            for temp_path in self.temp_files:
+                cleanup_sra_temp_config(temp_path)
 
-        if self.check_result != "Pass":
-            await self.cur_user_config.set("Data", "IfPassCheck", False)
-            self._finish_user_log(self.check_result, "异常")
-            return self.check_result
+            if self.check_result != "Pass":
+                await self.cur_user_config.set("Data", "IfPassCheck", False)
+                self._finish_user_log(self.check_result, "异常")
+                return self.check_result
 
-        if self.run_book["SignIn"] and self.run_book["PassCheck"]:
-            await self.cur_user_config.set("Data", "IfPassCheck", True)
-            self._finish_user_log("HSR 人工排查通过", "完成")
-        else:
-            await self.cur_user_config.set("Data", "IfPassCheck", False)
-            self._finish_user_log("HSR 人工排查未通过", "异常")
-        return None
+            if self.run_book["SignIn"] and self.run_book["PassCheck"]:
+                await self.cur_user_config.set("Data", "IfPassCheck", True)
+                self._finish_user_log("HSR 人工排查通过", "完成")
+            else:
+                await self.cur_user_config.set("Data", "IfPassCheck", False)
+                self._finish_user_log("HSR 人工排查未通过", "异常")
+            return None
+        finally:
+            await self._unsubscribe_broadcast()
 
     async def on_crash(self, e: Exception) -> None:
         self.crashed = True
         self.error_message = str(e)
         self.cur_user_item.status = "异常"
-        await self.cur_user_config.set("Data", "IfPassCheck", False)
         if self._current_user_log is not None:
             self._current_user_log.status = f"HSR 人工排查异常: {e}"
         logger.exception(f"HSR 用户「{self.cur_user_item.name}」人工排查异常：{e}")
-        await Config.send_websocket_message(
-            id=self.task_info.task_id,
-            type="Info",
-            data={
-                "Error": f"HSR 用户「{self.cur_user_item.name}」人工排查异常：{e}"
-            },
-        )
+
+        try:
+            await self.cur_user_config.set("Data", "IfPassCheck", False)
+        except Exception as write_error:  # noqa: BLE001
+            logger.warning(f"HSR 人工排查异常状态写回失败：{write_error}")
+
+        try:
+            await Config.send_websocket_message(
+                id=self.task_info.task_id,
+                type="Info",
+                data={
+                    "Error": f"HSR 用户「{self.cur_user_item.name}」人工排查异常：{e}"
+                },
+            )
+        except Exception as notify_error:  # noqa: BLE001
+            logger.warning(f"发送 HSR 人工排查异常提示失败：{notify_error}")
+        finally:
+            await self._unsubscribe_broadcast()

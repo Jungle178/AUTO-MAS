@@ -257,7 +257,9 @@ class HSRAutoProxyTask(TaskExecuteBase):
         self.runtime.game_exe_path = game_exe_path
         self.runtime.game_launch_checked = False
         self.runtime.game_started_by_mas = False
+        self.runtime.game_session_clean = False
         self.runtime.last_external_script = None
+        self.runtime.game_transitioning = True
 
         try:
             await System.kill_process(game_exe_path)
@@ -275,10 +277,16 @@ class HSRAutoProxyTask(TaskExecuteBase):
             else:
                 self._append_log("游戏进程已关闭，准备重新启动")
         except Exception as e:  # noqa: BLE001
-            logger.warning(f"补跑前重启 HSR 游戏失败：{e}")
-            raise RuntimeError(f"补跑前重启游戏失败：{e}") from e
+            logger.warning(f"{reason}关闭 HSR 游戏失败：{e}")
+            self._append_log(f"{reason}关闭游戏失败，将继续尝试启动流程：{e}")
 
-        await self._account_switcher.ensure_game_started_by_mas()
+        try:
+            await self._account_switcher.ensure_game_started_by_mas()
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"{reason}重启 HSR 游戏失败：{e}")
+            raise RuntimeError(f"{reason}重启游戏失败：{e}") from e
+        finally:
+            self.runtime.game_transitioning = False
 
     def _get_run_times_limit(self) -> int:
         """读取脚本页最大尝试次数，最小为 1。"""
@@ -836,7 +844,65 @@ class HSRAutoProxyTask(TaskExecuteBase):
             temp_files=temp_files,
         )
 
-    def _prepend_login_for_queue(
+    def _with_phase_login_items(
+        self,
+        phase_items: list[HSRRunItem],
+        *,
+        user_item: UserItem,
+        user_cfg,
+        user_name: str,
+        uid: str,
+        phase: HSRPhase,
+        login_plan: HSRLoginPlan,
+        script_id: str,
+        temp_files: list[Path],
+    ) -> list[HSRRunItem]:
+        """为一个阶段补齐 SRA StartGame，覆盖阶段重启和 M7A->SRA 混排。"""
+
+        if not phase_items or not login_plan.uses_sra_start_game:
+            return phase_items
+
+        items: list[HSRRunItem] = []
+        previous_script: str | None = None
+        if not any(item.module_key == "StartGame" for item in phase_items):
+            items.append(
+                self._create_start_game_item(
+                    user_item=user_item,
+                    user_cfg=user_cfg,
+                    user_name=user_name,
+                    uid=uid,
+                    phase=phase,
+                    login_plan=login_plan,
+                    script_id=script_id,
+                    temp_files=temp_files,
+                )
+            )
+
+        for item in phase_items:
+            if (
+                item.module_key != "StartGame"
+                and item.script == "SRA"
+                and previous_script == "M7A"
+            ):
+                items.append(
+                    self._create_start_game_item(
+                        user_item=user_item,
+                        user_cfg=user_cfg,
+                        user_name=user_name,
+                        uid=uid,
+                        phase=phase,
+                        login_plan=login_plan,
+                        script_id=script_id,
+                        temp_files=temp_files,
+                    )
+                )
+            items.append(item)
+            if item.module_key != "StartGame":
+                previous_script = item.script
+
+        return items
+
+    def _with_login_items_for_queue(
         self,
         items: list[HSRRunItem],
         *,
@@ -848,24 +914,28 @@ class HSRAutoProxyTask(TaskExecuteBase):
         script_id: str,
         temp_files: list[Path],
     ) -> list[HSRRunItem]:
-        """按登录计划为首轮队列前置进入游戏步骤。"""
+        """按登录计划为队列补齐阶段级和脚本切换前的 SRA StartGame。"""
 
         if not items or not login_plan.uses_sra_start_game:
             return items
 
-        return [
-            self._create_start_game_item(
-                user_item=user_item,
-                user_cfg=user_cfg,
-                user_name=user_name,
-                uid=uid,
-                phase="daily",
-                login_plan=login_plan,
-                script_id=script_id,
-                temp_files=temp_files,
-            ),
-            *items,
-        ]
+        result: list[HSRRunItem] = []
+        for phase in ("daily", "weekly", "monthly"):
+            phase_items = [item for item in items if item.phase == phase]
+            result.extend(
+                self._with_phase_login_items(
+                    phase_items,
+                    user_item=user_item,
+                    user_cfg=user_cfg,
+                    user_name=user_name,
+                    uid=uid,
+                    phase=phase,
+                    login_plan=login_plan,
+                    script_id=script_id,
+                    temp_files=temp_files,
+                )
+            )
+        return result
 
     @staticmethod
     def _retry_phase_needs_login(
@@ -904,7 +974,7 @@ class HSRAutoProxyTask(TaskExecuteBase):
                 phase_items,
                 login_plan=login_plan,
             ):
-                retry_items.append(
+                phase_items = [
                     self._create_start_game_item(
                         user_item=user_item,
                         user_cfg=user_cfg,
@@ -914,10 +984,23 @@ class HSRAutoProxyTask(TaskExecuteBase):
                         login_plan=login_plan,
                         script_id=script_id,
                         temp_files=temp_files,
-                    )
-                )
+                    ),
+                    *phase_items,
+                ]
 
-            retry_items.extend(phase_items)
+            retry_items.extend(
+                self._with_phase_login_items(
+                    phase_items,
+                    user_item=user_item,
+                    user_cfg=user_cfg,
+                    user_name=user_name,
+                    uid=uid,
+                    phase=phase,
+                    login_plan=login_plan,
+                    script_id=script_id,
+                    temp_files=temp_files,
+                )
+            )
 
         return retry_items
 
@@ -995,7 +1078,7 @@ class HSRAutoProxyTask(TaskExecuteBase):
         )
         if abyss_skip:
             self._append_log(f"用户「{user_name}」月常跳过：{abyss_skip_reason}")
-            return self._prepend_login_for_queue(
+            return self._with_login_items_for_queue(
                 items,
                 user_item=user_item,
                 user_cfg=user_cfg,
@@ -1022,7 +1105,7 @@ class HSRAutoProxyTask(TaskExecuteBase):
             )
         )
 
-        return self._prepend_login_for_queue(
+        return self._with_login_items_for_queue(
             items,
             user_item=user_item,
             user_cfg=user_cfg,
@@ -1033,6 +1116,26 @@ class HSRAutoProxyTask(TaskExecuteBase):
             temp_files=temp_files,
         )
 
+    @staticmethod
+    def _remaining_items_after(
+        items: list[HSRRunItem],
+        *,
+        phases: tuple[HSRPhase, ...],
+        phase_index: int,
+        phase_items: list[HSRRunItem],
+        item_index: int,
+        failures: list[HSRRunItem],
+    ) -> list[HSRRunItem]:
+        """返回当前项之后尚未执行且尚未标记失败的队列项。"""
+
+        remaining = list(phase_items[item_index + 1:])
+        for later_phase in phases[phase_index + 1:]:
+            remaining.extend(item for item in items if item.phase == later_phase)
+        return [
+            candidate for candidate in remaining
+            if all(candidate is not failed for failed in failures)
+        ]
+
     async def _run_queue_items(
         self,
         items: list[HSRRunItem],
@@ -1041,13 +1144,14 @@ class HSRAutoProxyTask(TaskExecuteBase):
 
         failures: list[HSRRunItem] = []
         completed_phases: set[HSRPhase] = set()
+        phases: tuple[HSRPhase, ...] = ("daily", "weekly", "monthly")
         phase_labels = {
             "daily": "日常",
             "weekly": "周常",
             "monthly": "月常",
         }
 
-        for phase in ("daily", "weekly", "monthly"):
+        for phase_index, phase in enumerate(phases):
             phase_items = [item for item in items if item.phase == phase]
             if not phase_items:
                 continue
@@ -1057,7 +1161,7 @@ class HSRAutoProxyTask(TaskExecuteBase):
                 await self._restart_game(user_name, f"进入{phase_labels[phase]}阶段前")
             completed_phases.add(phase)
 
-            for item in phase_items:
+            for item_index, item in enumerate(phase_items):
                 item.attempts += 1
                 self._append_log(
                     f"用户「{item.user_name}」执行 {item.script} "
@@ -1074,6 +1178,19 @@ class HSRAutoProxyTask(TaskExecuteBase):
                         f"用户「{item.user_name}」模块「{item.module_name}」执行失败："
                         f"{item.last_error}"
                     )
+                    if item.module_key == "StartGame":
+                        remaining = self._remaining_items_after(
+                            items,
+                            phases=phases,
+                            phase_index=phase_index,
+                            phase_items=phase_items,
+                            item_index=item_index,
+                            failures=failures,
+                        )
+                        for candidate in remaining:
+                            candidate.last_error = "SRA 登录/切号失败，当前阶段未执行"
+                        failures.extend(remaining)
+                        return failures
                     continue
                 except Exception as e:  # noqa: BLE001
                     item.last_error = str(e)
@@ -1082,6 +1199,19 @@ class HSRAutoProxyTask(TaskExecuteBase):
                         f"用户「{item.user_name}」模块「{item.module_name}」执行异常："
                         f"{item.last_error}"
                     )
+                    if item.module_key == "StartGame":
+                        remaining = self._remaining_items_after(
+                            items,
+                            phases=phases,
+                            phase_index=phase_index,
+                            phase_items=phase_items,
+                            item_index=item_index,
+                            failures=failures,
+                        )
+                        for candidate in remaining:
+                            candidate.last_error = "SRA 登录/切号失败，当前阶段未执行"
+                        failures.extend(remaining)
+                        return failures
                     continue
 
                 if bool(getattr(result, "success", True)):
@@ -1110,11 +1240,14 @@ class HSRAutoProxyTask(TaskExecuteBase):
                 )
 
                 if item.module_key == "StartGame":
-                    remaining = [
-                        candidate for candidate in items
-                        if candidate is not item
-                        and all(candidate is not failed for failed in failures)
-                    ]
+                    remaining = self._remaining_items_after(
+                        items,
+                        phases=phases,
+                        phase_index=phase_index,
+                        phase_items=phase_items,
+                        item_index=item_index,
+                        failures=failures,
+                    )
                     for candidate in remaining:
                         candidate.last_error = "SRA 登录/切号失败，当前阶段未执行"
                     failures.extend(remaining)
@@ -1129,6 +1262,8 @@ class HSRAutoProxyTask(TaskExecuteBase):
         try:
             while not run_task.done():
                 await asyncio.sleep(1)
+                if self.runtime.game_transitioning:
+                    continue
                 if not is_process_running(HSR_GAME_PROCESS_NAME):
                     await self._stop_external_processes()
                     run_task.cancel()
@@ -1265,8 +1400,14 @@ class HSRAutoProxyTask(TaskExecuteBase):
                 )
             # 只要日常阶段有模块执行成功，就登记代理日期；
             # 后续周常/月常失败不影响日常已完成的事实。
-            _daily_items = [i for i in current_items if i.phase == "daily"]
-            _daily_failed = [i for i in failed_items if i.phase == "daily"]
+            _daily_items = [
+                i for i in current_items
+                if i.phase == "daily" and i.module_key != "StartGame"
+            ]
+            _daily_failed = [
+                i for i in failed_items
+                if i.phase == "daily" and i.module_key != "StartGame"
+            ]
             if _daily_items and len(_daily_failed) < len(_daily_items):
                 self._queue_daily_proxy_completion(uid, user_name)
             self._finish_current_user_log(status)
