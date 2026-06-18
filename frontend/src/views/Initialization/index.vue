@@ -283,7 +283,7 @@ async function executeStep(stepKey: string): Promise<boolean> {
         result = await (window.electronAPI as any).installGit(state.selectedMirror)
         break
       case 'repository':
-        result = await (window.electronAPI as any).pullRepository(targetBranch.value, state.selectedMirror)
+        result = await (window.electronAPI as any).pullRepository(targetBranch.value)
         break
       case 'dependency':
         result = await (window.electronAPI as any).installDependencies(state.selectedMirror)
@@ -325,7 +325,7 @@ async function executeStep(stepKey: string): Promise<boolean> {
 
     state.status = 'failed'
     state.message = errorMsg
-    state.showMirrorSelection = true
+    state.showMirrorSelection = stepKey !== 'repository'
 
     // 开始倒计时
     startCountdown(stepKey)
@@ -568,11 +568,10 @@ async function loadMirrorConfigs() {
     await api.initMirrors()
 
     // 并行获取所有镜像源配置
-    const [pythonMirrors, getPipMirrors, gitMirrors, repoMirrors, pipMirrors] = await Promise.all([
+    const [pythonMirrors, getPipMirrors, gitMirrors, pipMirrors] = await Promise.all([
       api.getMirrors('python'),      // Python 安装包
       api.getMirrors('get_pip'),     // get-pip.py 脚本
       api.getMirrors('git'),         // Git 安装包
-      api.getMirrors('repo'),        // Git 仓库
       api.getMirrors('pip_mirror'),  // PyPI 镜像源
     ])
 
@@ -590,14 +589,14 @@ async function loadMirrorConfigs() {
     stepStates.value.python.mirrors = pythonMirrors.map(convertMirror)
     stepStates.value.pip.mirrors = getPipMirrors.map(convertMirror)
     stepStates.value.git.mirrors = gitMirrors.map(convertMirror)
-    stepStates.value.repository.mirrors = repoMirrors.map(convertMirror)
+    stepStates.value.repository.mirrors = []
     stepStates.value.dependency.mirrors = pipMirrors.map(convertMirror)
 
     logger.info('镜像源配置加载完成')
     logger.info(`Python 镜像源: ${stepStates.value.python.mirrors.map(m => m.name)}`)
     logger.info(`Pip 镜像源: ${stepStates.value.pip.mirrors.map(m => m.name)}`)
     logger.info(`Git 镜像源: ${stepStates.value.git.mirrors.map(m => m.name)}`)
-    logger.info(`Repository 镜像源: ${stepStates.value.repository.mirrors.map(m => m.name)}`)
+    logger.info('Repository 固定源: https://github.com/Jungle178/AUTO-MAS.git')
     logger.info(`Dependency 镜像源: ${stepStates.value.dependency.mirrors.map(m => m.name)}`)
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error)

@@ -139,7 +139,7 @@ export function registerInitializationHandlers(mainWindow: BrowserWindow) {
 
     ipcMain.handle('pull-repository', async (event, targetBranch: string = 'dev-nte-plus-hsr', selectedMirror?: string) => {
         if (selectedMirror) {
-            logger.info(`使用指定镜像源拉取源码: ${selectedMirror}`)
+            logger.info(`源码拉取固定使用 GitHub fork，忽略镜像源: ${selectedMirror}`)
         }
         const appRoot = getAppRoot()
         const initService = getInitService(targetBranch)
@@ -150,7 +150,7 @@ export function registerInitializationHandlers(mainWindow: BrowserWindow) {
 
         const result = await repoService.pullRepository((progress) => {
             event.sender.send('repository-progress', progress)
-        }, selectedMirror)
+        })
 
         if (!result.success) {
             logger.error(`源码拉取失败: ${result.error}`)

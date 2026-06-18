@@ -119,52 +119,52 @@ const DEFAULT_MIRROR_CONFIG: MirrorConfig = {
     repo: [
         {
             key: 'cnb',
-            name: 'GitHub fork 测试源',
-            url: 'https://github.com/Jungle178/AUTO-MAS.git',
+            name: 'CNB 官方镜像',
+            url: 'https://cnb.cool/AUTO-MAS-Project/AUTO-MAS.git',
             type: 'mirror',
-            description: 'NTE/HSR 测试 fork 源'
+            description: 'CNB 镜像源，更新及时，国内访问速度快'
         },
         {
             key: 'gitee 镜像源',
             name: 'gitee',
-            url: 'https://github.com/Jungle178/AUTO-MAS.git',
+            url: 'https://gitee.com/auto-mas-project/AUTO-MAS.git',
             type: 'mirror',
-            description: 'NTE/HSR 测试 fork 源'
+            description: 'Gitee 镜像源，更新会有少许延迟'
         },
         {
             key: 'ghproxy_cloudflare',
             name: 'gh-proxy (Cloudflare)',
-            url: 'https://gh-proxy.com/https://github.com/Jungle178/AUTO-MAS.git',
+            url: 'https://gh-proxy.com/https://github.com/AUTO-MAS-Project/AUTO-MAS.git',
             type: 'mirror',
             description: 'Cloudflare CDN 镜像，适合全球用户'
         },
         {
             key: 'ghproxy_fastly',
             name: 'gh-proxy (Fastly CDN)',
-            url: 'https://cdn.gh-proxy.com/https://github.com/Jungle178/AUTO-MAS.git',
+            url: 'https://cdn.gh-proxy.com/https://github.com/AUTO-MAS-Project/AUTO-MAS.git',
             type: 'mirror',
             description: 'Fastly CDN 镜像服务'
         },
         {
             key: 'ghproxy_edgeone',
             name: 'gh-proxy (EdgeOne)',
-            url: 'https://edgeone.gh-proxy.com/https://github.com/Jungle178/AUTO-MAS.git',
+            url: 'https://edgeone.gh-proxy.com/https://github.com/AUTO-MAS-Project/AUTO-MAS.git',
             type: 'mirror',
             description: 'EdgeOne 镜像服务'
         },
         {
             key: 'ghfast',
             name: 'ghfast 镜像',
-            url: 'https://ghfast.top/https://github.com/Jungle178/AUTO-MAS.git',
+            url: 'https://ghfast.top/https://github.com/AUTO-MAS-Project/AUTO-MAS.git',
             type: 'mirror',
             description: '第三方镜像服务'
         },
         {
             key: 'github',
             name: 'GitHub 官方',
-            url: 'https://github.com/Jungle178/AUTO-MAS.git',
+            url: 'https://github.com/AUTO-MAS-Project/AUTO-MAS.git',
             type: 'official',
-            description: 'NTE/HSR 测试 fork 源，在中国大陆连通性不佳，可能需要科学上网'
+            description: '官方源，在中国大陆连通性不佳，可能需要科学上网'
         }
     ],
     pip_mirror: [
@@ -258,9 +258,6 @@ export class MirrorService {
                 logger.info('使用默认镜像源配置')
             }
         }
-
-        // NTE/HSR 测试版固定从 fork 拉取源码，避免云端镜像配置覆盖回官方仓库。
-        this.mirrorConfig.repo = DEFAULT_MIRROR_CONFIG.repo
 
         logger.info(`API 端点: ${JSON.stringify(this.apiEndpoints)}`)
     }

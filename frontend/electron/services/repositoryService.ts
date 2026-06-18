@@ -7,11 +7,19 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { spawn } from 'child_process'
 import { MirrorService, MirrorSource } from './mirrorService'
-import { MirrorRotationService, NetworkOperationCallback, NetworkOperationProgress } from './mirrorRotationService'
+import { NetworkOperationProgress } from './mirrorRotationService'
 
 // 导入日志服务
 import { getLogger } from './logger'
 const logger = getLogger('仓库服务')
+
+const FORK_REPOSITORY: MirrorSource = {
+    key: 'github-fork',
+    name: 'GitHub fork 测试源',
+    url: 'https://github.com/Jungle178/AUTO-MAS.git',
+    type: 'official',
+    description: 'NTE/HSR 测试 fork 源'
+}
 
 // ==================== 类型定义 ====================
 
@@ -42,16 +50,12 @@ export class RepositoryService {
     private appRoot: string
     private repoPath: string
     private gitExe: string
-    private mirrorService: MirrorService
-    private rotationService: MirrorRotationService
     private targetBranch: string
 
-    constructor(appRoot: string, mirrorService: MirrorService, targetBranch: string = 'dev-nte-plus-hsr') {
+    constructor(appRoot: string, _mirrorService: MirrorService, targetBranch: string = 'dev-nte-plus-hsr') {
         this.appRoot = appRoot
         this.repoPath = path.join(appRoot, 'repo')
         this.gitExe = path.join(appRoot, 'environment', 'git', 'bin', 'git.exe')
-        this.mirrorService = mirrorService
-        this.rotationService = new MirrorRotationService()
         this.targetBranch = targetBranch
     }
 
@@ -60,6 +64,10 @@ export class RepositoryService {
      */
     async pullRepository(onProgress?: RepositoryProgressCallback, selectedMirror?: string): Promise<{ success: boolean; error?: string }> {
         try {
+            if (selectedMirror) {
+                logger.info(`源码拉取固定使用 GitHub fork，忽略镜像源选择: ${selectedMirror}`)
+            }
+
             // 第一步：环境检查
             onProgress?.({
                 stage: 'check',
@@ -87,18 +95,17 @@ export class RepositoryService {
                 message: '正在拉取仓库...',
                 details: {}
             })
-            const pullResult = await this.pullOrCloneRepository(checkResult, (opProgress, mirrorName, mirrorIndex, totalMirrors) => {
+            const pullResult = await this.pullOrCloneRepository(checkResult, (opProgress, mirrorName) => {
                 onProgress?.({
                     stage: 'pull',
                     progress: opProgress.progress,
                     message: opProgress.description,
                     details: {
                         currentMirror: mirrorName,
-                        mirrorProgress: { current: mirrorIndex + 1, total: totalMirrors },
                         operationDesc: opProgress.description
                     }
                 })
-            }, selectedMirror)
+            })
 
             if (!pullResult.success) {
                 return { success: false, error: pullResult.error }
@@ -233,37 +240,23 @@ export class RepositoryService {
      */
     private async pullOrCloneRepository(
         checkResult: RepositoryCheckResult,
-        onProgress?: (progress: NetworkOperationProgress, mirrorName: string, mirrorIndex: number, totalMirrors: number) => void,
-        selectedMirror?: string
+        onProgress?: (progress: NetworkOperationProgress, mirrorName: string) => void
     ): Promise<{ success: boolean; error?: string }> {
-        const mirrors = this.mirrorService.getMirrors('repo')
+        logger.info(`源码拉取固定使用仓库: ${FORK_REPOSITORY.url}`)
 
-        // 定义仓库拉取操作
-        const repoOperation: NetworkOperationCallback = async (mirror, onOpProgress) => {
-            if (checkResult.exists && checkResult.isGitRepo && checkResult.isHealthy) {
-                // 本地仓库已存在，执行更新
-                return await this.updateExistingRepository(mirror, onOpProgress)
-            } else {
-                // 本地仓库不存在，执行克隆
-                return await this.cloneNewRepository(mirror, onOpProgress)
-            }
+        const emitProgress = (progress: NetworkOperationProgress) => {
+            onProgress?.(progress, FORK_REPOSITORY.name)
         }
 
-        // 使用镜像源轮替
-        const result = await this.rotationService.execute(mirrors, repoOperation, (rotationProgress) => {
-            onProgress?.(
-                rotationProgress.operationProgress,
-                rotationProgress.currentMirror.name,
-                rotationProgress.mirrorIndex,
-                rotationProgress.totalMirrors
-            )
-        }, selectedMirror)
+        const result = checkResult.exists && checkResult.isGitRepo && checkResult.isHealthy
+            ? await this.updateExistingRepository(FORK_REPOSITORY, emitProgress)
+            : await this.cloneNewRepository(FORK_REPOSITORY, emitProgress)
 
         if (!result.success) {
             return { success: false, error: result.error }
         }
 
-        logger.info(`仓库拉取完成，使用镜像源: ${result.usedMirror?.name}`)
+        logger.info(`仓库拉取完成，使用固定仓库: ${FORK_REPOSITORY.name}`)
         return { success: true }
     }
 
