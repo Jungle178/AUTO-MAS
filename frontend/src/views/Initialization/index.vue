@@ -54,6 +54,7 @@ const stepStatus = ref<'wait' | 'process' | 'finish' | 'error'>('process')
 const initCompleted = ref(false)
 const forceEnterVisible = ref(false)
 const isDev = import.meta.env.DEV
+const version = '5.4.0'
 const targetBranch = ref('dev-nte-plus-hsr')
 
 logger.info(`当前环境: ${isDev ? '开发环境' : '生产环境'}, 目标分支: ${targetBranch.value}`)

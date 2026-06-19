@@ -5,7 +5,7 @@
 
 import * as fs from 'fs'
 import * as path from 'path'
-import { spawn } from 'child_process'
+import { spawn, spawnSync } from 'child_process'
 import { MirrorService, MirrorSource } from './mirrorService'
 import { NetworkOperationProgress } from './mirrorRotationService'
 
@@ -30,6 +30,11 @@ export interface RepositoryCheckResult {
     currentBranch?: string
 }
 
+interface BranchCheckResult {
+    exists: boolean
+    error?: string
+}
+
 export interface RepositoryProgress {
     stage: 'check' | 'pull' | 'deploy'
     progress: number
@@ -49,14 +54,68 @@ export type RepositoryProgressCallback = (progress: RepositoryProgress) => void
 export class RepositoryService {
     private appRoot: string
     private repoPath: string
+    private bundledGitExe: string
     private gitExe: string
     private targetBranch: string
 
     constructor(appRoot: string, _mirrorService: MirrorService, targetBranch: string = 'dev-nte-plus-hsr') {
         this.appRoot = appRoot
         this.repoPath = path.join(appRoot, 'repo')
-        this.gitExe = path.join(appRoot, 'environment', 'git', 'bin', 'git.exe')
+        this.bundledGitExe = path.join(appRoot, 'environment', 'git', 'bin', 'git.exe')
+        this.gitExe = this.resolveGitExecutable()
         this.targetBranch = targetBranch
+    }
+
+    /**
+     * 解析 Git 可执行文件
+     */
+    private resolveGitExecutable(): string {
+        const systemGit = this.findSystemGit()
+        if (systemGit) {
+            logger.info(`仓库拉取使用系统 Git: ${systemGit}`)
+            return systemGit
+        }
+
+        logger.info(`仓库拉取使用内置 Git: ${this.bundledGitExe}`)
+        return this.bundledGitExe
+    }
+
+    /**
+     * 查找系统 Git，避开应用内置 Git
+     */
+    private findSystemGit(): string | null {
+        if (process.platform !== 'win32') {
+            return null
+        }
+
+        try {
+            const result = spawnSync('where.exe', ['git'], {
+                encoding: 'utf-8',
+                windowsHide: true
+            })
+
+            if (result.status !== 0 || !result.stdout) {
+                return null
+            }
+
+            const appRoot = path.resolve(this.appRoot).toLowerCase()
+            const candidates = result.stdout
+                .split(/\r?\n/)
+                .map((item) => item.trim())
+                .filter(Boolean)
+
+            for (const candidate of candidates) {
+                const gitPath = path.resolve(candidate)
+                const normalized = gitPath.toLowerCase()
+                if (!normalized.startsWith(appRoot) && fs.existsSync(gitPath)) {
+                    return gitPath
+                }
+            }
+        } catch (error) {
+            logger.warn(`查找系统 Git 失败: ${error instanceof Error ? error.message : String(error)}`)
+        }
+
+        return null
     }
 
     /**
@@ -272,10 +331,10 @@ export class RepositoryService {
         try {
             // 1. 确认目标分支是否存在
             onProgress({ progress: 10, description: '检查目标分支...' })
-            const branchExists = await this.checkRemoteBranch(mirror.url, this.targetBranch)
+            const branchCheck = await this.checkRemoteBranch(mirror.url, this.targetBranch)
 
-            if (!branchExists) {
-                return { success: false, error: `目标分支 ${this.targetBranch} 不存在` }
+            if (!branchCheck.exists) {
+                return { success: false, error: branchCheck.error || `目标分支 ${this.targetBranch} 不存在` }
             }
 
             // 2. 配置远程仓库 URL
@@ -315,10 +374,10 @@ export class RepositoryService {
         try {
             // 1. 确认目标分支是否存在
             onProgress({ progress: 10, description: '检查目标分支...' })
-            const branchExists = await this.checkRemoteBranch(mirror.url, this.targetBranch)
+            const branchCheck = await this.checkRemoteBranch(mirror.url, this.targetBranch)
 
-            if (!branchExists) {
-                return { success: false, error: `目标分支 ${this.targetBranch} 不存在` }
+            if (!branchCheck.exists) {
+                return { success: false, error: branchCheck.error || `目标分支 ${this.targetBranch} 不存在` }
             }
 
             // 2. 克隆指定分支的最新提交
@@ -337,37 +396,54 @@ export class RepositoryService {
     /**
      * 检查远程分支是否存在
      */
-    private checkRemoteBranch(repoUrl: string, branch: string): Promise<boolean> {
+    private checkRemoteBranch(repoUrl: string, branch: string): Promise<BranchCheckResult> {
         return new Promise((resolve) => {
             const proc = spawn(this.gitExe, ['ls-remote', '--heads', repoUrl, branch], {
+                env: {
+                    ...process.env,
+                    GIT_TERMINAL_PROMPT: '0'
+                },
                 stdio: 'pipe'
             })
+
+            let settled = false
+            const finish = (result: BranchCheckResult) => {
+                if (settled) {
+                    return
+                }
+                settled = true
+                clearTimeout(timeout)
+                resolve(result)
+            }
 
             // 设置 30 秒超时
             const timeout = setTimeout(() => {
                 logger.warn('检查远程分支超时，终止进程')
                 proc.kill()
-                resolve(false)
+                finish({ exists: false, error: `检查远程分支超时，请确认可以访问 ${repoUrl}` })
             }, 30000)
 
             let output = ''
+            let errorOutput = ''
             proc.stdout?.on('data', (data) => {
                 output += data.toString()
             })
+            proc.stderr?.on('data', (data) => {
+                errorOutput += data.toString()
+            })
 
             proc.on('close', (code) => {
-                clearTimeout(timeout)
                 if (code === 0) {
                     const exists = output.includes(`refs/heads/${branch}`)
-                    resolve(exists)
+                    finish({ exists })
                 } else {
-                    resolve(false)
+                    const error = errorOutput.trim() || `Git 退出码: ${code}`
+                    finish({ exists: false, error: `检查远程分支失败: ${error}` })
                 }
             })
 
-            proc.on('error', () => {
-                clearTimeout(timeout)
-                resolve(false)
+            proc.on('error', (error) => {
+                finish({ exists: false, error: `启动 Git 失败: ${error.message}` })
             })
         })
     }
